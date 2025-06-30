@@ -5,6 +5,11 @@ echo "   IndexTTS Enhanced 一键安装脚本"
 echo "========================================"
 echo
 
+echo "🚀 激活conda环境..."
+# 创建Python环境
+conda create -n index-tts python=3.10 -y
+conda activate index-tts
+
 echo "🚀 开始安装IndexTTS Enhanced..."
 echo
 
