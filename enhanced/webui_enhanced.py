@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from indextts.infer import IndexTTS
 from indextts.voice_manager import VoiceManager
 from tools.i18n.i18n import I18nAuto
+import traceback
 
 # API请求模型
 class TTSRequest(BaseModel):
@@ -143,7 +144,8 @@ def generate_tts_internal(prompt_audio_path, text, infer_mode, max_text_tokens_p
             return None, "生成失败"
             
     except Exception as e:
-        return None, f"生成失败: {str(e)}"
+        tb = traceback.format_exc()
+        return None, f"生成失败: {str(e)}\n{tb}"
 
 def gen_single(prompt, text, infer_mode, max_text_tokens_per_sentence=120, sentences_bucket_max_size=4,
                *args, progress=gr.Progress()):
@@ -645,9 +647,11 @@ if cmd_args.enable_api:
                 return result
             
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"参数格式错误: {str(e)}")
+            tb = traceback.format_exc()
+            return {"success": False, "message": f"参数格式错误: {str(e)}\n{tb}"}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            tb = traceback.format_exc()
+            return {"success": False, "message": f"生成失败: {str(e)}\n{tb}"}
 
     @app.get("/api/voices")
     async def api_get_voices():
@@ -668,7 +672,7 @@ if cmd_args.enable_api:
             raise HTTPException(status_code=404, detail="音频文件不存在")
 
     # 将FastAPI应用挂载到Gradio
-    demo = gr.mount_gradio_app(app, demo, path="/")
+    demo = gr.mount_gradio_app(app, demo, path="")
 
 if __name__ == "__main__":
     if cmd_args.enable_api:
