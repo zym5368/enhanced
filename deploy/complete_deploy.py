@@ -12,7 +12,6 @@ import platform
 from pathlib import Path
 import urllib.request
 import tempfile
-import shutil
 
 def run_cmd(cmd, check=True):
     """执行命令"""
@@ -139,36 +138,17 @@ trusted-host = pypi.tuna.tsinghua.edu.cn
     run_cmd(cmd)
     print("✅ PyTorch安装完成")
 
-def clone_and_merge_projects(python_path, pip_path):
-    """拉取官方源码和增强内容"""
-    print("📂 拉取官方源码和增强内容...")
-    home = Path.home()
-    official_dir = home / "index-tts-official"
-    enhanced_dir = home / "index-tts-enhanced"
+def clone_and_setup_project(python_path, pip_path):
+    """克隆和设置项目"""
+    print("📂 克隆和设置项目...")
+    project_dir = Path.home() / "index-tts-enhanced"
     
-    # 拉取官方源码
-    if not official_dir.exists():
-        run_cmd(f"git clone https://github.com/index-tts/index-tts.git {official_dir}")
+    if not project_dir.exists():
+        run_cmd(f"git clone https://github.com/index-tts/index-tts.git {project_dir}")
     
-    # 拉取增强内容
-    if not enhanced_dir.exists():
-        run_cmd(f"git clone https://github.com/zym5368/enhanced.git {enhanced_dir}")
+    os.chdir(project_dir)
     
-    # 用增强内容覆盖官方源码
-    print("🔄 合并增强内容到官方源码...")
-    for root, dirs, files in os.walk(enhanced_dir):
-        rel_path = os.path.relpath(root, enhanced_dir)
-        target_dir = official_dir / rel_path if rel_path != '.' else official_dir
-        os.makedirs(target_dir, exist_ok=True)
-        for file in files:
-            src_file = os.path.join(root, file)
-            dst_file = os.path.join(target_dir, file)
-            shutil.copy2(src_file, dst_file)
-    
-    print("✅ 增强内容合并完成")
-    
-    # 安装依赖
-    os.chdir(official_dir)
+    # 安装项目依赖
     run_cmd(f"{pip_path} install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple")
     if os.path.exists("requirements.txt"):
         run_cmd(f"{pip_path} install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple")
@@ -201,98 +181,151 @@ huggingface-hub"""
     
     run_cmd(f"{pip_path} install -r requirements_enhanced.txt -i https://pypi.tuna.tsinghua.edu.cn/simple")
     
-    print("✅ 项目依赖安装完成")
-    return official_dir
+    print("✅ 项目设置完成")
+    return project_dir
+
+def download_enhanced_files(project_dir):
+    """下载增强功能文件"""
+    print("📥 下载增强功能文件...")
+    
+    # 创建基础的增强文件
+    enhanced_files = {
+        "webui_enhanced.py": """import gradio as gr
+import os, sys, time
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from indextts.infer import IndexTTS
+from indextts.voice_manager import VoiceManager
+
+tts = IndexTTS(model_dir="checkpoints", cfg_path="checkpoints/config.yaml")
+voice_manager = VoiceManager()
+
+def generate_speech(text, voice_name):
+    if not text or not voice_name:
+        return None, "请输入文本和音色名称"
+    
+    try:
+        voice_path = voice_manager.get_voice_audio_path(voice_name)
+        if not voice_path:
+            return None, f"音色 '{voice_name}' 不存在"
+        
+        output_path = f"outputs/output_{int(time.time())}.wav"
+        result = tts.infer(voice_path, text, output_path)
+        return result, "生成成功"
+    except Exception as e:
+        return None, f"生成失败: {str(e)}"
+
+with gr.Blocks(title="IndexTTS Enhanced") as app:
+    gr.Markdown("# IndexTTS Enhanced")
+    
+    with gr.Row():
+        text_input = gr.Textbox(label="输入文本", placeholder="请输入要转换的文本...")
+        voice_input = gr.Textbox(label="音色名称", placeholder="输入音色名称")
+    
+    generate_btn = gr.Button("生成语音", variant="primary")
+    
+    with gr.Row():
+        audio_output = gr.Audio(label="生成的音频")
+        status_output = gr.Textbox(label="状态")
+    
+    generate_btn.click(
+        fn=generate_speech,
+        inputs=[text_input, voice_input],
+        outputs=[audio_output, status_output]
+    )
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=7860)
+    args = parser.parse_args()
+    
+    app.launch(server_name=args.host, server_port=args.port)
+""",
+        
+        "api_server.py": """from fastapi import FastAPI
+from pydantic import BaseModel
+import uvicorn
+import os, sys, time
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from indextts.infer import IndexTTS
+from indextts.voice_manager import VoiceManager
+
+app = FastAPI(title="IndexTTS API")
+tts = IndexTTS(model_dir="checkpoints", cfg_path="checkpoints/config.yaml")
+voice_manager = VoiceManager()
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_name: str
+
+@app.post("/api/tts")
+async def generate_tts(request: TTSRequest):
+    try:
+        voice_path = voice_manager.get_voice_audio_path(request.voice_name)
+        if not voice_path:
+            return {"success": False, "message": f"音色 '{request.voice_name}' 不存在"}
+        
+        output_path = f"outputs/api/output_{int(time.time())}.wav"
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        result = tts.infer(voice_path, request.text, output_path)
+        return {"success": True, "audio_path": output_path}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/voices")
+async def get_voices():
+    voices = voice_manager.list_voices()
+    return {"voices": voices}
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    
+    uvicorn.run(app, host=args.host, port=args.port)
+"""
+    }
+    
+    for filename, content in enhanced_files.items():
+        file_path = project_dir / filename
+        if not file_path.exists():
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content)
+            print(f"✅ 创建: {filename}")
+    
+    print("✅ 增强功能文件创建完成")
 
 def download_models(python_path, project_dir):
-    """下载模型文件"""
     print("🤖 下载模型文件...")
-    
     checkpoints_dir = project_dir / "checkpoints"
     checkpoints_dir.mkdir(exist_ok=True)
-    
-    # 检查是否已有模型文件
     model_files = ["config.yaml", "gpt.pth", "dvae.pth", "bigvgan_generator.pth"]
     if all((checkpoints_dir / f).exists() for f in model_files):
         print("✅ 模型文件已存在")
         return True
-    
-    # 配置HuggingFace国内镜像
-    hf_mirrors = [
-        "https://hf-mirror.com",
-        "https://huggingface.co"  # 备用官方源
-    ]
-    
-    for mirror in hf_mirrors:
-        try:
-            print(f"🔄 尝试从 {mirror.split('//')[-1]} 下载模型...")
-            
-            # 设置HuggingFace镜像环境变量
-            os.environ['HF_ENDPOINT'] = mirror
-            
-            download_script = f'''
-import os
-os.environ['HF_ENDPOINT'] = '{mirror}'
-from huggingface_hub import snapshot_download
-import time
-
-print("开始下载模型，这可能需要几分钟...")
-try:
-    snapshot_download(
-        repo_id="IndexTeam/IndexTTS-1.5",
-        local_dir="{project_dir}/checkpoints",
-        allow_patterns=["*.yaml", "*.pth", "*.model", "*.vocab"],
-        resume_download=True,
-        max_workers=4
+    # 安装 huggingface-hub
+    run_cmd(f"{python_path} -m pip install huggingface-hub -i https://pypi.tuna.tsinghua.edu.cn/simple")
+    # 下载模型文件
+    print("📥 使用 huggingface-cli 下载模型文件...")
+    download_cmd = (
+        f"huggingface-cli download IndexTeam/IndexTTS-1.5 "
+        f"config.yaml bigvgan_discriminator.pth bigvgan_generator.pth bpe.model dvae.pth gpt.pth unigram_12000.vocab "
+        f"--local-dir {checkpoints_dir}"
     )
-    print("✅ 模型下载完成")
-except Exception as e:
-    print(f"❌ 模型下载失败: {{e}}")
-    raise
-'''
-            
-            result = run_cmd(f'{python_path} -c "{download_script}"')
-            print("✅ 模型下载完成")
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ 从 {mirror.split('//')[-1]} 下载失败: {e}")
-            continue
-    
-    # 所有镜像都失败，尝试ModelScope
-    print("🔄 尝试从ModelScope下载模型...")
-    try:
-        modelscope_script = f'''
-try:
-    from modelscope import snapshot_download
-    snapshot_download(
-        model_id="IndexTeam/IndexTTS-1.5",
-        cache_dir="{project_dir}/checkpoints",
-        revision="master"
-    )
-    print("✅ ModelScope下载完成")
-except ImportError:
-    print("❌ ModelScope未安装，请手动下载模型")
-    raise
-except Exception as e:
-    print(f"❌ ModelScope下载失败: {{e}}")
-    raise
-'''
-        
-        # 安装ModelScope
-        run_cmd(f"{python_path} -m pip install modelscope -i https://pypi.tuna.tsinghua.edu.cn/simple")
-        result = run_cmd(f'{python_path} -c "{modelscope_script}"')
+    print("模型下载命令:")
+    print(f"  pip install huggingface-hub")
+    print(f"  {download_cmd}")
+    result = run_cmd(download_cmd, check=False)
+    if result.returncode == 0:
         print("✅ 模型下载完成")
         return True
-        
-    except Exception as e:
-        print(f"❌ ModelScope下载也失败: {e}")
-        
-    print("💡 所有自动下载方式都失败，请手动下载模型:")
-    print("   1. 访问: https://huggingface.co/IndexTeam/IndexTTS-1.5")
-    print("   2. 或访问: https://modelscope.cn/models/IndexTeam/IndexTTS-1.5")
-    print(f"   3. 下载所有.pth、.yaml、.model、.vocab文件到: {checkpoints_dir}")
-    return False
+    else:
+        print("❌ huggingface-cli 下载失败，请手动执行上述命令")
+        return False
 
 def create_startup_scripts(python_path, project_dir):
     """创建启动脚本"""
@@ -345,17 +378,20 @@ def main():
         # 4. 安装PyTorch
         install_pytorch(pip_path)
         
-        # 5. 拉取官方源码和增强内容
-        project_dir = clone_and_merge_projects(python_path, pip_path)
+        # 5. 克隆和设置项目
+        project_dir = clone_and_setup_project(python_path, pip_path)
         
-        # 6. 下载模型文件
+        # 6. 下载增强功能文件
+        download_enhanced_files(project_dir)
+        
+        # 7. 下载模型文件
         if not download_models(python_path, project_dir):
             print("⚠️ 模型下载失败，但可以后续手动下载")
         
-        # 7. 创建启动脚本
+        # 8. 创建启动脚本
         create_startup_scripts(python_path, project_dir)
         
-        # 8. 创建必要目录
+        # 9. 创建必要目录
         os.makedirs(project_dir / "outputs" / "api", exist_ok=True)
         os.makedirs(project_dir / "voices", exist_ok=True)
         
