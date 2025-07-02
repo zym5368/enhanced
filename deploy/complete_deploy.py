@@ -12,6 +12,7 @@ import platform
 from pathlib import Path
 import urllib.request
 import tempfile
+import shutil
 
 def run_cmd(cmd, check=True):
     """执行命令"""
@@ -356,6 +357,28 @@ cd {project_dir}
     
     print("✅ 启动脚本创建完成")
 
+def find_or_install_conda():
+    """优先检测系统已有conda，否则自动下载安装Miniconda"""
+    # 1. 检查conda命令是否在PATH中
+    conda_path = shutil.which("conda")
+    if conda_path:
+        print(f"✅ 检测到系统已安装conda: {conda_path}")
+        return conda_path
+    # 2. 检查常见安装路径
+    home = os.path.expanduser("~")
+    possible_paths = [
+        f"{home}/miniconda3/bin/conda",
+        f"{home}/anaconda3/bin/conda",
+        "/opt/conda/bin/conda"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"✅ 检测到conda: {path}")
+            return path
+    # 3. 未检测到，自动下载安装
+    print("⚠️ 未检测到conda，自动下载安装Miniconda...")
+    return install_miniconda()
+
 def main():
     """主函数"""
     print("🚀 IndexTTS Enhanced 完整部署开始")
@@ -367,9 +390,10 @@ def main():
         if not install_system_deps():
             return False
         
-        # 2. 安装Miniconda
-        conda_path = install_miniconda()
+        # 2. 检测/安装conda
+        conda_path = find_or_install_conda()
         if not conda_path:
+            print("❌ conda安装失败，请手动安装conda后重试！")
             return False
         
         # 3. 设置conda环境
